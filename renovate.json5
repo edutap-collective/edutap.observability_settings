@@ -1,0 +1,79 @@
+// Renovate configuration. JSON5 rather than JSON so the reasoning can live next to
+// the rules — this file decides what arrives unasked in the pull request list, and
+// a rule nobody understands is a rule somebody switches off.
+//
+// Renovate itself runs as the hosted Mend app, installed once for the whole
+// organisation; there is no workflow of ours that drives it. Its pull requests are
+// therefore authored by a separate identity and trigger `.github/workflows/ci.yml`
+// like any other, which a self-hosted run under GITHUB_TOKEN would not: GitHub
+// refuses to trigger workflows from that token, so every update would arrive
+// untested.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    // Once a week, before 4 AM. Dependency updates are not news; a Monday morning
+    // batch is read, a stream through the week is dismissed.
+    "schedule:earlyMondays",
+    // .pre-commit-config.yaml pins ruff and pre-commit-hooks by revision. Without
+    // this, those two pins are the only ones in the repository nothing watches —
+    // and they decide what `prek` enforces before every commit.
+    ":enablePreCommit",
+  ],
+
+  timezone: "Europe/Berlin",
+
+  // No automerge anywhere: green CI proves the suite still passes, not that the
+  // update is one we want. See `ruff` below for a version bump that is green and
+  // still a decision.
+  packageRules: [
+    {
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+    },
+    {
+      matchManagers: ["pre-commit"],
+      groupName: "pre-commit hooks",
+    },
+    {
+      // Everything under `[project.optional-dependencies]` — the `dev` and `docs`
+      // extras. None of it is installed anywhere the service runs, so one pull
+      // request for the batch is proportionate.
+      matchManagers: ["pep621"],
+      matchDepTypes: ["project.optional-dependencies"],
+      groupName: "development dependencies",
+    },
+    {
+      // Out of that batch: the pin is `>=0.16,<0.17` on purpose, because a ruff
+      // minor release changes what the linter reports and reformats files that were
+      // formatted correctly yesterday. Its own pull request, describing a decision
+      // rather than a bump.
+      matchManagers: ["pep621"],
+      matchPackageNames: ["ruff"],
+      groupName: null,
+      commitMessageTopic: "ruff (rule and formatter changes expected)",
+    },
+    {
+      // The runtime dependencies of a service that other services read through.
+      // Each one on its own, so the pull request is about that library.
+      matchManagers: ["pep621"],
+      matchDepTypes: ["project.dependencies"],
+      groupName: null,
+    },
+    {
+      // Dockerfile hardcodes /usr/local/lib/python3.14/site-packages, because that
+      // is where `pip install` puts the package inside the base image it names. A
+      // bump to python:3.15-slim moves that path and the build fails — loudly, but
+      // only where an image is actually built, which is why ci.yml builds one.
+      matchManagers: ["dockerfile"],
+      matchPackageNames: ["python"],
+      commitMessageTopic: "the Python base image (also update the site-packages path)",
+    },
+  ],
+
+  // `edutap.db_definitions` is a PEP 508 direct reference to a git branch, not a
+  // version range. Renovate would offer to pin @main to a commit, which is a
+  // decision the dev extra already took the other way round in its own comment.
+  ignoreDeps: ["edutap.db_definitions"],
+}

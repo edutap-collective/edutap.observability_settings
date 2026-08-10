@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+.env
+docs/_build/
+uv.lock
+
+.superpowers/
+
+# mutmut copies the whole project here to run the suite against each mutant.
+mutants/

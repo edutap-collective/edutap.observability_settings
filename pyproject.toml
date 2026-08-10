@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "edutap.observability_settings"
+version = "0.1.0"
+description = "Error reporting, tracing and structured logging, wired the same way in every eduTAP service"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "EUPL-1.2"
+authors = [{ name = "eduTAP" }]
+# Unlike edutap.data_models, this package is allowed its dependencies: wiring three
+# backends is what it exists for, and a service that installs it has already decided
+# to carry them. What it must not grow is a dependency on any eduTAP service -- it is
+# imported before a service resolves its own settings, so it can know nothing about
+# them.
+dependencies = [
+    # PEP 508 direct reference: edutap.data_models is public but not published to a
+    # public index. Pinned to the branch of the change that introduces ServiceSettings
+    # until that lands; the pin moves to the release tag before this is merged.
+    "edutap.data_models @ git+https://github.com/edutap-collective/edutap.data_models@feature/vokabular-und-service-settings",
+    "logfire>=4.40",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sentry-sdk>=2.67",
+    "structlog>=25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pdbp",
+    "pytest>=8.2",
+    # Pinned to one minor: ruff's isort classification changed between 0.14 and 0.16
+    # and started flagging files that were clean before, so an open floor makes local
+    # runs and CI disagree over time. Keep the hook rev in .pre-commit-config in step.
+    "ruff>=0.16,<0.17",
+    "ty",
+]
+docs = ["myst-parser", "sphinx>=8"]
+
+[project.urls]
+Source = "https://github.com/edutap-collective/edutap.observability_settings"
+Issues = "https://github.com/edutap-collective/edutap.observability_settings/issues"
+
+[tool.hatch.metadata]
+# edutap.data_models is a PEP 508 direct reference, and hatchling refuses those
+# unless a package says it means it. It does: the dependency is public but not on a
+# public index, and the alternative -- installing it in a separate step before this
+# package -- makes the install order load-bearing in every environment.
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/edutap"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "S101"]

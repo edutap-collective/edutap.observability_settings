@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Nothing here is locked: uv.lock is git-ignored and every requirement is a lower
+  # bound. A suite that passed last week can fail today with nothing changed here.
+  schedule:
+    - cron: "17 5 * * 1"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -v
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv venv
+      - run: uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m ruff check src tests
+      - run: .venv/bin/python -m ruff format --check src tests
+      - run: .venv/bin/python -m ty check src
