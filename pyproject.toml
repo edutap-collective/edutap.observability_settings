@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "edutap.observability_settings"
-version = "0.1.0"
+version = "0.1.1"
 description = "Error reporting, tracing and structured logging, wired the same way in every eduTAP service"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -20,7 +20,7 @@ dependencies = [
     # public index. Pinned to a tag rather than to a branch -- a branch reference makes
     # somebody else's merge change this package's build without a line changing here,
     # and the branch this pointed at during review no longer exists.
-    "edutap.data_models @ git+https://github.com/edutap-collective/edutap.data_models@v0.1.0",
+    "edutap.data_models @ git+https://github.com/edutap-collective/edutap.data_models@v0.2.0",
     "logfire>=4.40",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
