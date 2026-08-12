@@ -61,11 +61,12 @@ Source = "https://github.com/edutap-collective/edutap.observability_settings"
 Issues = "https://github.com/edutap-collective/edutap.observability_settings/issues"
 
 [tool.hatch.metadata]
-# edutap.data_models is a PEP 508 direct reference, and hatchling refuses those
-# unless a package says it means it. It does: the dependency is public but not on a
-# public index, and the alternative -- installing it in a separate step before this
-# package -- makes the install order load-bearing in every environment.
-allow-direct-references = true
+# `allow-direct-references` is gone with the reason it was added for: edutap.data_models
+# was the only direct reference here, and it is a range now. Not left standing as a
+# harmless leftover -- PyPI refuses a distribution whose metadata carries a direct
+# reference, so with the flag still set a future `pkg @ git+...` would build cleanly,
+# pass CI, and fail at upload with a message about metadata rather than about the line
+# somebody wrote. Without it, hatchling refuses at build time, where the mistake is.
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/edutap"]
