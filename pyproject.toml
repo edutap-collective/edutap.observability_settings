@@ -10,17 +10,33 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "EUPL-1.2"
 authors = [{ name = "eduTAP" }]
+# No `License ::` classifier: `license` above is a PEP 639 SPDX expression, and the
+# two together are rejected by the build backend rather than merely redundant.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
 # Unlike edutap.data_models, this package is allowed its dependencies: wiring three
 # backends is what it exists for, and a service that installs it has already decided
 # to carry them. What it must not grow is a dependency on any eduTAP service -- it is
 # imported before a service resolves its own settings, so it can know nothing about
 # them.
 dependencies = [
-    # PEP 508 direct reference: edutap.data_models is public but not published to a
-    # public index. Pinned to a tag rather than to a branch -- a branch reference makes
-    # somebody else's merge change this package's build without a line changing here,
-    # and the branch this pointed at during review no longer exists.
-    "edutap.data_models @ git+https://github.com/edutap-collective/edutap.data_models@v0.2.1",
+    # A range, not a pinned git reference, and that is the whole point of publishing
+    # edutap.data_models. A PEP 508 direct reference cannot carry a version specifier
+    # -- the grammar makes URL and range mutually exclusive -- so a tag here was not a
+    # strict choice but the only expressible one, and it forced every consumer to move
+    # in lockstep: two different tags for one name are two identities, which no
+    # resolver can reconcile.
+    #
+    # Upper bound at the next minor because this package reads the settings mixins and
+    # the runtime helpers directly; a 0.x minor is where those may change shape.
+    "edutap.data_models>=0.2.1,<0.3",
     "logfire>=4.40",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",

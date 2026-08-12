@@ -7,6 +7,10 @@ on:
   # bound. A suite that passed last week can fail today with nothing changed here.
   schedule:
     - cron: "17 5 * * 1"
+  # Callable, so the release workflow runs *these* checks rather than its own copy.
+  # A release gate that drifts from CI is a gate that passes what CI would have
+  # stopped -- and it drifts silently, because nobody reads two files side by side.
+  workflow_call:
 jobs:
   test:
     runs-on: ubuntu-latest
