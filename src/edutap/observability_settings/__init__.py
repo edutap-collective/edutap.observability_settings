@@ -24,8 +24,28 @@ __all__ = [
     "ObservabilitySettings",
     "PersonUidMode",
     "install_observability",
+    "instrument_fastapi_safely",
     "logfire_options",
     "person_label",
     "pseudonym",
     "sentry_options",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Resolve `instrument_fastapi_safely` on first access, not on import.
+
+    `.instrumentation` imports `fastapi` and `starlette` at module level, so a plain
+    `from .instrumentation import instrument_fastapi_safely` up top would make a web
+    framework a hard dependency of every consumer of this package -- including a
+    worker that installs it without the `fastapi` extra specifically so it does not
+    have to carry one. Its plain `import edutap.observability_settings` would then
+    raise `ImportError`, which defeats the reason the extra exists in the first
+    place. PEP 562 defers the import to the moment something actually asks for the
+    name, so a worker that never asks never pays for it.
+    """
+    if name == "instrument_fastapi_safely":
+        from .instrumentation import instrument_fastapi_safely
+
+        return instrument_fastapi_safely
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

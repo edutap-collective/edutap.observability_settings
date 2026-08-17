@@ -32,6 +32,22 @@ Call it before the service resolves the settings it needs to run, so that a proc
 refusing to start is reported rather than silently absent. Nothing here can fail for
 want of a value.
 
+### FastAPI services
+
+```python
+from edutap.observability_settings import install_observability, instrument_fastapi_safely
+
+install_observability(service_name="edutap.image_service")
+instrument_fastapi_safely(app)
+```
+
+Needs the `fastapi` extra. It exists because `logfire.instrument_fastapi()` exports
+the request path: a service whose identifier sits in its URL exports that identifier
+on every span, whatever `person_uid_mode` says. In `omit` and `pseudonym` the path
+attributes are replaced by the route template and captured endpoint arguments are
+dropped; in `plain` the call is a straight pass-through, because a deployment that
+asked to see identifiers gets to see them.
+
 ## Configuration
 
 One prefix for the whole estate, `EDUTAP_`. These fields are defined by an eduTAP

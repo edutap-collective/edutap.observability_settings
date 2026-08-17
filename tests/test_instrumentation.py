@@ -266,3 +266,11 @@ def test_a_validation_error_does_not_carry_the_rejected_input(captured_spans, mo
     TestClient(app).post("/lookup", json={"person_uid": PERSON})
 
     assert not [value for value in _exported_values(captured_spans) if PERSON in value]
+
+
+def test_the_call_is_public_api():
+    """A consumer imports it from the package, not from a private module path."""
+    import edutap.observability_settings as package
+
+    assert "instrument_fastapi_safely" in package.__all__
+    assert package.instrument_fastapi_safely is instrument_fastapi_safely
