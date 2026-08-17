@@ -14,8 +14,13 @@ in `docs/superpowers/specs/2026-08-17-safe-fastapi-instrumentation-design.md`.
 from collections.abc import Mapping, MutableMapping
 from typing import Any, cast
 
+import logfire
+from fastapi import FastAPI
+from opentelemetry.trace import Span
 from starlette.applications import Starlette
 from starlette.routing import Match
+
+from .settings import ObservabilitySettings
 
 #: Stands in for the template of a request that matched no route.
 #:
@@ -50,3 +55,48 @@ def route_template(app: Starlette, scope: Mapping[str, Any]) -> str:
         if match is Match.FULL:
             return getattr(route, "path", UNMATCHED)
     return UNMATCHED
+
+
+def _overwrite_path_attributes(app: FastAPI) -> Any:
+    """Build the hook that replaces the path-bearing attributes with the template."""
+
+    def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
+        if span is None:
+            return
+        template = route_template(app, scope)
+        # Set rather than delete: the OpenTelemetry API has no removal, and an
+        # attribute left in place is one that still carries the path.
+        span.set_attribute("http.target", template)
+        span.set_attribute("http.url", template)
+        span.set_attribute("logfire.msg", f"{scope.get('method', '')} {template}".strip())
+
+    return server_request_hook
+
+
+def instrument_fastapi_safely(
+    app: FastAPI,
+    settings: ObservabilitySettings | None = None,
+    **kwargs: Any,
+) -> None:
+    """Instrument `app`, honouring `person_uid_mode` in what the spans carry.
+
+    A separate call rather than a parameter on `install_observability`: not every
+    service in this estate is a FastAPI service, `logfire[fastapi]` is an optional
+    extra, and a worker must not have to install it to configure its logging.
+
+    In `plain` mode this is a straight pass-through to `logfire.instrument_fastapi`.
+    That is not an oversight to be tightened later -- a package that redacted anyway
+    would be taking a decision belonging to the deployment, and the operator who
+    asked to see identifiers would have no way to get them back.
+    """
+    settings = settings or ObservabilitySettings()
+
+    if settings.person_uid_mode == "plain":
+        logfire.instrument_fastapi(app, **kwargs)
+        return
+
+    logfire.instrument_fastapi(
+        app,
+        server_request_hook=_overwrite_path_attributes(app),
+        **kwargs,
+    )
