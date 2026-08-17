@@ -53,6 +53,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "fastapi",
+    "httpx",
     "pdbp",
     "pytest>=8.2",
     # Pinned to one minor: ruff's isort classification changed between 0.14 and 0.16
@@ -61,6 +63,10 @@ dev = [
     "ruff>=0.16,<0.17",
     "ty",
 ]
+# The FastAPI half of logfire, kept out of the core install: a worker configures its
+# logging from this package and must not have to carry a web framework's
+# instrumentation to do it.
+fastapi = ["logfire[fastapi]>=4.40"]
 docs = ["myst-parser", "sphinx>=8"]
 
 [project.urls]
