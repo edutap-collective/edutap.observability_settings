@@ -103,6 +103,41 @@ def _overwrite_path_attributes(app: FastAPI) -> Any:
     return server_request_hook
 
 
+def _reduce_request_attributes(request: object, attributes: dict) -> dict:
+    """Replace every captured endpoint argument, and every rejected input, with its shape.
+
+    **The default is drop, not pass-through.** Endpoint parameter *names* are not a
+    boundary this package controls: a body parameter can be called anything a future
+    endpoint author chooses, and a query parameter could be named `person_uid`
+    outright. This package also cannot judge a value by its shape the way a single
+    service can -- it does not know the service's models. So nothing survives, and a
+    service that needs an argument on its spans passes its own mapper and owns that
+    decision.
+
+    `errors` is reduced separately because of a Pydantic detail rather than a FastAPI
+    one: a "missing field" error's `input` is not the missing value but the whole
+    enclosing dict, because the error is reported against the model. `type` and `loc`
+    survive -- which field, what kind of problem, from Pydantic's own fixed
+    vocabulary -- and `input` and `msg` do not; a custom validator can put a value
+    into `msg`.
+    """
+    reduced = dict(attributes)
+
+    values = reduced.get("values")
+    if isinstance(values, dict):
+        reduced["values"] = {"argument_count": len(values)}
+
+    errors = reduced.get("errors")
+    if isinstance(errors, list):
+        reduced["errors"] = [
+            {"type": entry.get("type"), "loc": entry.get("loc")}
+            for entry in errors
+            if isinstance(entry, dict)
+        ]
+
+    return reduced
+
+
 def instrument_fastapi_safely(
     app: FastAPI,
     settings: ObservabilitySettings | None = None,
@@ -128,5 +163,8 @@ def instrument_fastapi_safely(
     logfire.instrument_fastapi(
         app,
         server_request_hook=_overwrite_path_attributes(app),
+        request_attributes_mapper=kwargs.pop(
+            "request_attributes_mapper", _reduce_request_attributes
+        ),
         **kwargs,
     )

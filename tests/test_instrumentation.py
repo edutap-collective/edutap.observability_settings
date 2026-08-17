@@ -214,3 +214,55 @@ def test_plain_keeps_the_identifier(captured_spans):
     TestClient(app).get(f"/persons/{PERSON}/photos")
 
     assert [value for value in _exported_values(captured_spans) if PERSON in value]
+
+
+def _app_with_body() -> FastAPI:
+    """An app whose validation errors can carry an identifier.
+
+    Pydantic reports a missing field against the *model*, so the error's `input` is
+    the whole enclosing dict -- identifier included -- on a plain 422 with no
+    exception anywhere in the picture.
+    """
+    from pydantic import BaseModel
+
+    class Lookup(BaseModel):
+        person_uid: str
+        fields: list[str]
+
+    app = FastAPI()
+
+    @app.post("/lookup")
+    async def lookup(body: Lookup) -> dict:
+        return {}
+
+    return app
+
+
+@pytest.mark.parametrize("mode", ["omit", "pseudonym"])
+def test_endpoint_arguments_do_not_reach_the_span(captured_spans, mode):
+    app = _app()
+    instrument_fastapi_safely(
+        app,
+        ObservabilitySettings(
+            person_uid_mode=mode, pseudonym_salt="a-salt", _env_file=None, _secrets_dir=None
+        ),
+    )
+    TestClient(app).get(f"/persons/{PERSON}/photos")
+
+    assert not [value for value in _exported_values(captured_spans) if PERSON in value]
+
+
+@pytest.mark.parametrize("mode", ["omit", "pseudonym"])
+def test_a_validation_error_does_not_carry_the_rejected_input(captured_spans, mode):
+    app = _app_with_body()
+    instrument_fastapi_safely(
+        app,
+        ObservabilitySettings(
+            person_uid_mode=mode, pseudonym_salt="a-salt", _env_file=None, _secrets_dir=None
+        ),
+    )
+    # `fields` is missing, so the error is reported against the model and its
+    # `input` is the whole body -- with the identifier in it.
+    TestClient(app).post("/lookup", json={"person_uid": PERSON})
+
+    assert not [value for value in _exported_values(captured_spans) if PERSON in value]
