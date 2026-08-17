@@ -206,8 +206,9 @@ its own record rather than a rider on this one.
 ## Amendments
 
 *Appended 2026-08-17, after execution. The record above is left as it was written;
-these are the two decisions taken while implementing it that the record did not
-anticipate.*
+below are the two decisions taken while implementing it that the record did not
+anticipate — (a) and (b) — followed by (c), which is not a decision at all but a
+limit of the mechanism that the record should have stated from the start.*
 
 *The `Status` header at the top was moved from "accepted, not yet implemented" to
 "accepted, implemented 2026-08-17", and it is the one line above this section that

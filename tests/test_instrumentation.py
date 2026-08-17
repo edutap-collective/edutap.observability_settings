@@ -283,11 +283,16 @@ def test_a_validation_error_does_not_carry_the_rejected_input(captured_spans, mo
     assert captured_spans.spans, "no span was exported; the test proves nothing"
     assert not [value for value in _exported_values(captured_spans) if PERSON in value]
 
-    errors = _sole_attribute(captured_spans, "fastapi.arguments.errors")
-    assert errors, "the reducer dropped the errors entirely; a 422 would be unreadable"
     # logfire serialises a non-scalar attribute to JSON on its way onto the span, so
-    # what comes back is text rather than the list the reducer returned.
+    # what comes back is text rather than the list the reducer returned. Decode
+    # *before* asserting non-emptiness: an empty list arrives as the string "[]",
+    # which is perfectly truthy, so asserting on the raw attribute value would pass
+    # for a reducer that emitted no entries at all -- and then the loop below would
+    # run zero times and prove nothing. That is exactly the failure this test claims
+    # to guard, so the assertion has to be about the decoded list.
+    errors = _sole_attribute(captured_spans, "fastapi.arguments.errors")
     entries = json.loads(errors) if isinstance(errors, str) else errors
+    assert entries, "the reducer dropped the errors entirely; a 422 would be unreadable"
     for entry in entries:
         assert entry.get("type"), "the error kind did not survive the reducer"
         assert entry.get("loc"), "the rejected field's location did not survive the reducer"
