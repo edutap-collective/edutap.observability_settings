@@ -11,7 +11,13 @@ name = "edutap.observability_settings"
 # alternative and is worse -- consumers fetch it as a git reference today.
 #
 # From here one version means one tag means one commit.
-version = "0.1.3"
+#
+# 0.1.4, not 0.2.0: `instrument_fastapi_safely` and the `fastapi` extra are purely
+# additive -- nothing existing changed shape or behaviour. The bound decides it as
+# much as the semantics do: consumers pin `>=0.1.3,<0.2` (lmu_edutap_worker does),
+# and a minor bump would drop them out of range for a release that only gives them
+# a function they need not call.
+version = "0.1.4"
 description = "Error reporting, tracing and structured logging, wired the same way in every eduTAP service"
 readme = "README.md"
 requires-python = ">=3.13"
