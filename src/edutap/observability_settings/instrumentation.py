@@ -19,14 +19,34 @@ instrumentation actually populated. Writing a name that stayed unused is cosmeti
 span noise; leaving one unwritten is a disclosure the deployment's environment
 controls, which is not a knob this package hands out.
 
-The hook itself fails open. `logfire`'s ASGI instrumentation wraps
-`server_request_hook` in error handling that only records an exception on the span
-rather than propagating it -- if the hook raises, the request still succeeds and the
-raw path attributes stay exactly as the base instrumentation set them, unscrubbed.
-There is no hook into that failure path from here: it is OpenTelemetry's contract to
-`server_request_hook`, not this module's to change. The mitigation this module
-offers instead is that `route_template()` must stay total on any scope it is given
--- see its docstring -- so the hook never has a reason to raise in the first place.
+The hook itself fails open, and this module has to fail closed inside it.
+OpenTelemetry wraps `server_request_hook` in a `failsafe` that records a raising
+exception on the span and lets the request continue -- so if the hook raises, the
+request still succeeds and the raw path attributes stay exactly as the base
+instrumentation set them, unscrubbed. Measured on 2026-08-17 with `route_template`
+made to raise: the request returned 200 and the span still carried the raw path in
+`logfire.msg`, `http.target` and `http.url`. That failure path is OpenTelemetry's
+contract, not this module's to change.
+
+An earlier version of this file claimed the mitigation was that `route_template()`
+stays total. It is not total, and the claim was wrong twice over: a scope without
+`"path"` raises `KeyError` inside starlette's matcher, and any `BaseRoute` subclass
+in `app.router.routes` -- a third-party mount, a custom router -- whose `matches()`
+raises propagates straight out. Totality delegated to third-party implementations is
+exactly the kind of trust this module rejects everywhere else. So the hook catches
+instead and fails **closed**: any exception out of `route_template()` becomes
+`UNMATCHED`, the attributes are still overwritten, and what leaves the process is a
+useless placeholder rather than an identifier.
+
+**Span events are outside this module's reach.** Everything here operates on span
+*attributes* -- the hook and the mapper are the only two seams logfire offers, and
+neither sees an event. An endpoint that raises
+`RuntimeError(f"no such person {person_uid}")` records that text in
+`exception.message` on a span event, and nothing in this file touches it. That text
+is the calling service's, so keeping identifiers out of it is the calling service's
+responsibility -- but a service whose identifier sits in its path is exactly the
+service whose "not found" and "not permitted" handlers will reach for it, so it is
+worth saying rather than leaving to be discovered.
 
 The full reasoning, and why the route template rather than a redaction pattern, is
 in `docs/superpowers/specs/2026-08-17-safe-fastapi-instrumentation-design.md`.
@@ -58,6 +78,13 @@ def route_template(app: Starlette, scope: Mapping[str, Any]) -> str:
     `scope["route"]`: the hook this is called from runs *before* routing, so that key
     is not there yet. Measured -- reading it yields nothing at all rather than
     something stale.
+
+    **This is not total, and callers must not assume it is.** A scope without
+    `"path"` raises `KeyError` out of starlette's matcher, and `matches()` belongs to
+    whatever `BaseRoute` subclasses the application mounted -- a third-party router
+    may raise anything at all. The caller inside this module handles that by failing
+    closed to `UNMATCHED`; a caller elsewhere has to make the same decision
+    deliberately.
     """
     for route in app.router.routes:
         # `route.matches()` is typed for starlette's own `Scope` alias, which is a
@@ -84,7 +111,24 @@ def _overwrite_path_attributes(app: FastAPI) -> Any:
     def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
         if span is None:
             return
-        template = route_template(app, scope)
+        try:
+            template = route_template(app, scope)
+        except Exception:
+            # Fail closed. OpenTelemetry's `failsafe` around this hook records a
+            # raising exception on the span and lets the request through, which
+            # leaves the base instrumentation's raw path attributes standing --
+            # measured: 200 returned, identifier still in `logfire.msg`,
+            # `http.target` and `http.url`. `route_template()` is not total: a scope
+            # without `"path"` raises `KeyError`, and any third-party `BaseRoute`
+            # subclass in the route table may raise out of its own `matches()`.
+            #
+            # A bare `except Exception` rather than an enumeration of what can go
+            # wrong, because the whole point is the failure nobody enumerated. The
+            # exception is deliberately not re-raised and not logged here: this runs
+            # inside span creation for every request, and the safe outcome -- a
+            # placeholder where the path would have been -- is achieved by
+            # continuing.
+            template = UNMATCHED
         # Set rather than delete: the OpenTelemetry API has no removal, and an
         # attribute left in place is one that still carries the path.
         #
@@ -120,22 +164,33 @@ def _reduce_request_attributes(request: object, attributes: dict) -> dict:
     survive -- which field, what kind of problem, from Pydantic's own fixed
     vocabulary -- and `input` and `msg` do not; a custom validator can put a value
     into `msg`.
+
+    **Implemented as an allow-list, not as a copy with two keys rewritten.** The
+    earlier version did `dict(attributes)` and then overwrote `values` and `errors`,
+    which contradicted the paragraph above in two ways: a third key that a future
+    logfire release adds to this mapping would pass straight through unread, and a
+    `values` that is not a `dict` or an `errors` that is not a `list` would be
+    *kept* rather than dropped -- the type checks guarded the reduction rather than
+    the survival. The path half of this module is safe by construction and this half
+    was not. It builds a fresh mapping now, so a key nobody here recognises does not
+    exist in the result.
+
+    Nothing operational is lost by that. Confirmed against
+    `logfire/_internal/integrations/fastapi.py` on 2026-08-17: the mapper is handed
+    exactly `{'values': ..., 'errors': ...}`, built literally at the call site, and
+    logfire reads back only those two names afterwards.
     """
-    reduced = dict(attributes)
+    values = attributes.get("values")
+    errors = attributes.get("errors")
 
-    values = reduced.get("values")
-    if isinstance(values, dict):
-        reduced["values"] = {"argument_count": len(values)}
-
-    errors = reduced.get("errors")
-    if isinstance(errors, list):
-        reduced["errors"] = [
+    return {
+        "values": {"argument_count": len(values) if isinstance(values, dict) else 0},
+        "errors": [
             {"type": entry.get("type"), "loc": entry.get("loc")}
-            for entry in errors
+            for entry in (errors if isinstance(errors, list) else [])
             if isinstance(entry, dict)
-        ]
-
-    return reduced
+        ],
+    }
 
 
 def instrument_fastapi_safely(
@@ -153,6 +208,16 @@ def instrument_fastapi_safely(
     That is not an oversight to be tightened later -- a package that redacted anyway
     would be taking a decision belonging to the deployment, and the operator who
     asked to see identifiers would have no way to get them back.
+
+    The two hooks are handled asymmetrically on purpose. `request_attributes_mapper`
+    may be overridden through `**kwargs` -- a service that knows its own models can
+    judge its arguments by shape, which this package cannot -- but
+    `server_request_hook` may not: it is the whole path defence, and a consumer that
+    replaced it would silently get the raw URL back in five attributes while still
+    calling something named "safely". Passing one therefore raises `TypeError: got
+    multiple values for keyword argument 'server_request_hook'`, which is loud and at
+    the call site. A service that genuinely needs its own request hook calls
+    `logfire.instrument_fastapi()` directly and owns the outcome.
     """
     settings = settings or ObservabilitySettings()
 
