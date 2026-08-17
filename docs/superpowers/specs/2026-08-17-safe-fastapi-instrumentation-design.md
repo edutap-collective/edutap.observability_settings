@@ -1,7 +1,7 @@
 # Safe FastAPI instrumentation
 
 **Date:** 2026-08-17
-**Status:** accepted, not yet implemented
+**Status:** accepted, implemented 2026-08-17
 
 A snapshot of a decision at its date. It is not rewritten as things change; a
 different decision gets a new record.
@@ -207,9 +207,16 @@ its own record rather than a rider on this one.
 
 *Appended 2026-08-17, after execution. The record above is left as it was written;
 these are the two decisions taken while implementing it that the record did not
-anticipate. The `Status` header still reads "accepted, not yet implemented" and is
-left standing for the same reason — it was true when the record was written. It is
-implemented as of this amendment.*
+anticipate.*
+
+*The `Status` header at the top was moved from "accepted, not yet implemented" to
+"accepted, implemented 2026-08-17", and it is the one line above this section that
+was changed. "Append, do not rewrite" protects the **reasoning** — the argument, the
+measurements, the trade-offs — from being tidied up afterwards by somebody who
+already knows how it turned out. `Status` is lifecycle metadata about the record
+rather than part of the decision it captures, and left stale it is not a preserved
+snapshot but a false statement, misleading the next reader in the opposite direction
+from the one the rule exists to prevent.*
 
 ### (a) Both semantic-convention generations are overwritten, not one
 
