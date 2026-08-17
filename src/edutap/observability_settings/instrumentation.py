@@ -34,8 +34,15 @@ def route_template(app: Starlette, scope: Mapping[str, Any]) -> str:
     something stale.
     """
     for route in app.router.routes:
-        # `route.matches()` is typed for starlette's own `Scope` (a `MutableMapping`)
-        # because it may write matched path params back into it. This function's
+        # `route.matches()` is typed for starlette's own `Scope` alias, which is a
+        # `MutableMapping` package-wide (starlette/types.py) for the benefit of other
+        # code in the ASGI lifecycle -- not because `matches()` itself writes
+        # anything. Read (`Route.matches`, `Mount.matches` in starlette/routing.py):
+        # it only reads the scope it is given and returns a freshly built
+        # `child_scope`; the write-back (`scope.update(child_scope)`) happens in
+        # `BaseRoute.__call__`, which this function never calls. `matches()` being
+        # read-only is what makes the cast sound here, regardless of whether the
+        # concrete object passed in actually supports mutation. This function's
         # public signature stays read-only `Mapping` -- callers only ever read a
         # request's scope here -- so the cast, not a wider parameter type, absorbs
         # the mismatch.
