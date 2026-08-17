@@ -166,3 +166,109 @@ identifier exported under `plain` outlives the row it came from. This is a delet
 question rather than an access question, it applies to a deployment that trusts
 everyone who can read its collector, and it is the deployment's to answer. Recorded
 here so that it is a known gap rather than an unnoticed one.
+
+**The Sentry path is not covered, and still exports the raw URL.** *(Added
+2026-08-17 during execution, from a measurement taken after the tracing fix was
+working.)*
+
+`sentry-sdk` auto-enables `FastApiIntegration` and `StarletteIntegration` whenever
+`fastapi` is importable — no configuration on our side asks for them — and
+`send_default_pii=False` does not touch `request.url`. That option governs the
+things Sentry classifies as PII: request bodies, cookies, user IP, headers. A URL is
+not on that list, because for most applications a URL is not personal data. For a
+service whose identifier sits in its path, it is.
+
+Measured on 2026-08-17, `person_uid_mode="omit"`, `send_default_pii=False`, an
+endpoint on `GET /persons/{person_uid}/photos` raising an unhandled exception, with
+a `before_send` capturing the event instead of transmitting it:
+
+```
+integrations auto-enabled: FastApiIntegration, StarletteIntegration, HttpxIntegration, ...
+event["transaction"] = /persons/{person_uid}/photos        <- the template, correct
+event["request"]["url"] = http://testserver/persons/ab12cd34@lmu.de/photos
+```
+
+So `person_uid_mode` is, as of this branch, honoured on the **tracing** path and not
+on the **error-reporting** path. That asymmetry is stated plainly here because it is
+exactly what a reader of the README could otherwise get wrong: the README's FastAPI
+paragraph describes spans, and the natural inference — that the promise is now kept
+everywhere a request is observed — is false.
+
+The fix is known and small: a `before_send` that rebuilds `event["request"]["url"]`
+from `event["transaction"]`, which already holds the template, in the two non-`plain`
+modes. It is not done here for the same reason `edutap.data_provider` is not
+migrated: it is a different mechanism, in a different backend, with its own failure
+modes — `transaction` can be absent or itself be a raw path when the exception
+escapes before routing, and a `before_send` installed by this package interacts with
+any `before_send` a service installs itself. That deserves its own measurement and
+its own record rather than a rider on this one.
+
+## Amendments
+
+*Appended 2026-08-17, after execution. The record above is left as it was written;
+these are the two decisions taken while implementing it that the record did not
+anticipate. The `Status` header still reads "accepted, not yet implemented" and is
+left standing for the same reason — it was true when the record was written. It is
+implemented as of this amendment.*
+
+### (a) Both semantic-convention generations are overwritten, not one
+
+The record assumed one set of path attribute names. There are two.
+`opentelemetry-instrumentation-asgi` emits the legacy `http.target`/`http.url` by
+default, and the stable `url.path`/`url.full` instead once a deployment sets
+`OTEL_SEMCONV_STABILITY_OPT_IN` — OpenTelemetry's own documented migration switch
+off the legacy names.
+
+The first implementation overwrote only the legacy pair. Measured with the variable
+set: the legacy names came back as the `<unmatched>` placeholder — two decoy
+attributes nothing had produced — while `url.path` and `url.full` carried the raw
+identifier straight through. A deployment could therefore reopen the leak with an
+environment variable this package neither sets nor reads.
+
+All five names (`http.target`, `http.url`, `url.path`, `url.full`, `logfire.msg`) are
+now written unconditionally. Writing a name the active instrumentation never used is
+cosmetic span noise; leaving one unwritten is a disclosure controlled by somebody
+else's environment.
+
+**Why this is not tested by setting the variable.** OpenTelemetry reads it exactly
+once per process and caches the result (`_OpenTelemetrySemanticConventionStability`,
+guarded by an `_initialized` flag with no reset). Measured: setting it after any
+earlier `instrument_fastapi()` call in the same process has no effect. A test that
+set it would either do nothing or pass for a reason that stops holding when test
+order changes. The guard is one step earlier instead — assert that all five names are
+present and all carry the template — which is what makes the fix correct under either
+convention rather than under whichever one the test process happens to be running.
+
+### (b) The hook fails open, so the code fails closed inside it
+
+The record did not consider what happens when the hook itself raises. OpenTelemetry
+wraps `server_request_hook` in a `failsafe` that records the exception on the span and
+lets the request continue. Measured with `route_template` made to raise: the request
+returned 200 and the span still carried the raw path in `logfire.msg`, `http.target`
+and `http.url`. The scrubbing simply does not happen, and nothing about the response
+says so.
+
+The first implementation's stated mitigation was that `route_template()` stays total.
+**That claim was wrong.** A scope without `"path"` raises `KeyError` out of
+starlette's matcher, and `matches()` belongs to whatever `BaseRoute` subclasses the
+application mounted — a third-party router may raise anything at all. Totality
+delegated to third-party implementations is exactly the kind of trust this design
+rejects everywhere else; it is the same reasoning that rules out judging an argument
+by its parameter name.
+
+The mitigation is now a `try`/`except Exception` inside the hook that falls back to
+`UNMATCHED`. The attributes are still overwritten, so what leaves the process on a
+failure is a useless placeholder rather than an identifier — fail closed, not fail
+open. A bare `except Exception` rather than an enumeration, because the point is the
+failure nobody enumerated.
+
+### (c) A note the record should have carried from the start: span events
+
+Everything this design touches is a span *attribute*. The hook and the mapper are the
+only two seams logfire offers, and neither sees a span **event**. An endpoint raising
+`RuntimeError(f"no such person {person_uid}")` puts that identifier in
+`exception.message` on an event, and nothing in this package touches it. That text is
+the calling service's, so it is the calling service's responsibility — but a service
+whose identifier sits in its path is precisely the service whose "not found" and "not
+permitted" handlers will reach for it, so the first consumer needs to be told rather
+than left to discover it.
