@@ -48,8 +48,24 @@ concept:
 | `person_uid_mode` | `http.target`, `http.url`, `logfire.msg` | `fastapi.arguments.values` |
 | --- | --- | --- |
 | `plain` | untouched | untouched |
-| `pseudonym` | the route template | reduced, `person_uid` through `person_label()` |
-| `omit` | the route template | reduced, identifier dropped |
+| `pseudonym` | the route template | reduced to a count |
+| `omit` | the route template | reduced to a count |
+
+A count rather than nothing at all: how many arguments an endpoint received is
+operationally readable and carries none of them.
+
+**No allow-list, and no `person_label()` here.** An earlier draft of this record had
+`pseudonym` keep a pseudonymised identifier out of the captured arguments. It cannot:
+recognising which argument *is* the identifier means recognising it by parameter
+name, and `edutap.data_provider` measured that names are not a boundary worth
+trusting — a body parameter is called whatever a future endpoint author chooses.
+`data_provider` could judge by *shape* because it knows its own models; this package
+knows nothing about any service's, by design.
+
+So in the two non-`plain` modes every captured argument is dropped. A service that
+wants a pseudonymous label on its spans attaches it itself, in its own code, where it
+knows which value is the identifier — `person_label()` remains the tool for that, it
+is simply not callable from here.
 
 Two things are worth stating about why it is shaped this way.
 
