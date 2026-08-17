@@ -15,9 +15,31 @@ What must never appear here is a dependency on any eduTAP service. This is insta
 before a service resolves its own settings; it can know nothing about them.
 """
 
+from typing import TYPE_CHECKING
+
 from .install import install_observability, logfire_options, sentry_options
 from .pseudonym import person_label, pseudonym
 from .settings import OTLP_ENDPOINT_VARIABLE, ObservabilitySettings, PersonUidMode
+
+# `instrument_fastapi_safely` is published two ways, for two different readers, and
+# both halves below are load-bearing:
+#
+# - The runtime `__getattr__` further down defers the actual import to first access,
+#   so that a plain `import edutap.observability_settings` never imports `fastapi` --
+#   see its docstring for why that matters. This is what a worker without the
+#   `fastapi` extra depends on at runtime.
+# - This `TYPE_CHECKING` import is never executed -- `TYPE_CHECKING` is `False` at
+#   runtime -- so it costs nothing there, but it is what `ty`/`mypy` see, and it is
+#   what gives a consumer's typechecker a real signature for the name instead of the
+#   `object` that `__getattr__`'s return type would otherwise leave it with. Without
+#   this, `edutap.image_service` -- the reason this call was published -- would fail
+#   `ty check` on the exact usage this package's own README documents.
+#
+# Deleting the `__getattr__` re-introduces the hard dependency on a web framework;
+# deleting this import silently turns the published name back into `object` for
+# every downstream typechecker. Removing either one breaks a different consumer.
+if TYPE_CHECKING:
+    from .instrumentation import instrument_fastapi_safely
 
 __all__ = [
     "OTLP_ENDPOINT_VARIABLE",
@@ -43,6 +65,10 @@ def __getattr__(name: str) -> object:
     raise `ImportError`, which defeats the reason the extra exists in the first
     place. PEP 562 defers the import to the moment something actually asks for the
     name, so a worker that never asks never pays for it.
+
+    The `TYPE_CHECKING` import above this function carries the type a downstream
+    typechecker sees for the same name; this function is the runtime behaviour
+    behind it and is never consulted by a typechecker itself.
     """
     if name == "instrument_fastapi_safely":
         from .instrumentation import instrument_fastapi_safely
