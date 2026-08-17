@@ -53,6 +53,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # The `fastapi` extra of *this* package, self-referentially: the instrumentation
+    # tests need the FastAPI half of logfire, and base `logfire` does not carry it --
+    # `logfire/_internal/integrations/fastapi.py` raises `RuntimeError` when
+    # `opentelemetry-instrumentation-fastapi` is missing. Listing `fastapi` and
+    # `httpx` alone is what a local venv gets away with once somebody has installed
+    # the extra by hand; CI installs `.[dev]` into an empty environment and every
+    # `instrument_fastapi_safely` test errors there. A self-referential extra is
+    # valid packaging (PEP 508 allows a project to depend on itself by name) and is
+    # resolved by pip and uv alike.
+    "edutap.observability_settings[fastapi]",
+    "fastapi",
+    "httpx",
     "pdbp",
     "pytest>=8.2",
     # Pinned to one minor: ruff's isort classification changed between 0.14 and 0.16
@@ -61,6 +73,10 @@ dev = [
     "ruff>=0.16,<0.17",
     "ty",
 ]
+# The FastAPI half of logfire, kept out of the core install: a worker configures its
+# logging from this package and must not have to carry a web framework's
+# instrumentation to do it.
+fastapi = ["logfire[fastapi]>=4.40"]
 docs = ["myst-parser", "sphinx>=8"]
 
 [project.urls]
