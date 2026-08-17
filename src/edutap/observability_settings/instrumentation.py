@@ -7,6 +7,27 @@ identifier sits in its path exports that identifier on every span. Measured on
 conventions rather than from FastAPI argument capture, so the mapper logfire offers
 reaches only the fourth.
 
+Two OpenTelemetry naming generations are in play, not one. `http.target` and
+`http.url` are the legacy semantic conventions; `opentelemetry-instrumentation-asgi`
+emits `url.path` and `url.full` instead once a deployment sets the documented
+migration switch `OTEL_SEMCONV_STABILITY_OPT_IN` (OpenTelemetry's own opt-in path
+off the legacy names, https://opentelemetry.io/docs/specs/otel/http/). Measured with
+that variable set: the legacy names come back as `<unmatched>` -- decoys nothing
+produced -- while the new ones carry the raw path straight through. So the hook
+below overwrites both generations unconditionally, whichever one the active
+instrumentation actually populated. Writing a name that stayed unused is cosmetic
+span noise; leaving one unwritten is a disclosure the deployment's environment
+controls, which is not a knob this package hands out.
+
+The hook itself fails open. `logfire`'s ASGI instrumentation wraps
+`server_request_hook` in error handling that only records an exception on the span
+rather than propagating it -- if the hook raises, the request still succeeds and the
+raw path attributes stay exactly as the base instrumentation set them, unscrubbed.
+There is no hook into that failure path from here: it is OpenTelemetry's contract to
+`server_request_hook`, not this module's to change. The mitigation this module
+offers instead is that `route_template()` must stay total on any scope it is given
+-- see its docstring -- so the hook never has a reason to raise in the first place.
+
 The full reasoning, and why the route template rather than a redaction pattern, is
 in `docs/superpowers/specs/2026-08-17-safe-fastapi-instrumentation-design.md`.
 """
@@ -66,8 +87,17 @@ def _overwrite_path_attributes(app: FastAPI) -> Any:
         template = route_template(app, scope)
         # Set rather than delete: the OpenTelemetry API has no removal, and an
         # attribute left in place is one that still carries the path.
+        #
+        # Both http.* (legacy) and url.* (stable, opt-in via
+        # OTEL_SEMCONV_STABILITY_OPT_IN) are written unconditionally, because which
+        # pair the running instrumentation actually populated is a deployment's
+        # environment variable, not something this module observes. Whichever pair
+        # goes unused sits as inert noise; the alternative -- writing only the pair
+        # believed active -- means the wrong guess exports the identifier.
         span.set_attribute("http.target", template)
         span.set_attribute("http.url", template)
+        span.set_attribute("url.path", template)
+        span.set_attribute("url.full", template)
         span.set_attribute("logfire.msg", f"{scope.get('method', '')} {template}".strip())
 
     return server_request_hook

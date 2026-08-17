@@ -85,8 +85,18 @@ def captured_spans():
 
 
 def _exported_values(capture) -> list[str]:
-    """Every attribute value of every captured span, as text."""
-    return [str(value) for span in capture.spans for value in dict(span.attributes).values()]
+    """Every attribute value of every captured span, as text -- plus the span name.
+
+    `span.name` is exported alongside `span.attributes`, not inside it, so a helper
+    that only walked `.attributes` would let an identifier leaking into the name
+    itself pass unnoticed. It does not happen to leak there today (the name is
+    `f"{method} {route_template}"`, logfire's own doing, not this module's), but the
+    claim this helper backs is "every attribute of every span", and the name is
+    part of what a span exports.
+    """
+    values = [str(span.name) for span in capture.spans]
+    values += [str(value) for span in capture.spans for value in dict(span.attributes).values()]
+    return values
 
 
 @pytest.mark.parametrize("mode", ["omit", "pseudonym"])
@@ -138,7 +148,55 @@ def test_an_unmatched_path_does_not_leak_either(captured_spans, mode):
     )
     TestClient(app).get(f"/persons/{PERSON}/typo")
 
+    assert captured_spans.spans, "no span was exported; the test proves nothing"
     assert not [value for value in _exported_values(captured_spans) if PERSON in value]
+
+
+@pytest.mark.parametrize("mode", ["omit", "pseudonym"])
+def test_both_semantic_convention_generations_are_overwritten(captured_spans, mode):
+    """Guards the leak an env var can silently reopen.
+
+    `opentelemetry-instrumentation-asgi` writes `http.target`/`http.url` (the legacy
+    OTel HTTP semantic conventions) by default, and `url.path`/`url.full` (the
+    stable ones) instead once a deployment sets
+    `OTEL_SEMCONV_STABILITY_OPT_IN=http`. Measured with that variable set: the
+    legacy names come back as the `<unmatched>` placeholder -- decoys nothing
+    produced -- while the new ones carry the raw identifier straight through.
+
+    That variable cannot be exercised from inside this suite: OpenTelemetry's own
+    stability class reads it exactly once per process and caches the result
+    (`_OpenTelemetrySemanticConventionStability._initialize`, guarded by an
+    `_initialized` flag with no reset). Measured directly -- setting the variable
+    after any earlier `instrument_fastapi()` call in the same process, including an
+    earlier test in this same suite, has no effect on the names that call produces.
+    A test that set the variable here would therefore either do nothing (if an
+    earlier test already initialised the default) or pass for a reason that stops
+    holding the moment test order changes -- neither is a real guard.
+
+    So the guard is one step earlier: both attribute-name generations are written
+    unconditionally by the hook, regardless of which one the active instrumentation
+    populated. This asserts exactly that -- both are present, both carry the
+    template -- which is what makes the fix correct under either convention rather
+    than under whichever one happens to be running in this test process.
+    """
+    app = _app()
+    instrument_fastapi_safely(
+        app,
+        ObservabilitySettings(
+            person_uid_mode=mode, pseudonym_salt="a-salt", _env_file=None, _secrets_dir=None
+        ),
+    )
+    TestClient(app).get(f"/persons/{PERSON}/photos")
+
+    assert captured_spans.spans, "no span was exported; the test proves nothing"
+    attributes = dict(captured_spans.spans[0].attributes)
+    template = "/persons/{person_uid}/photos"
+    for name in ("http.target", "http.url", "url.path", "url.full", "logfire.msg"):
+        assert name in attributes, f"{name} was not written by the hook"
+    assert attributes["http.target"] == template
+    assert attributes["http.url"] == template
+    assert attributes["url.path"] == template
+    assert attributes["url.full"] == template
 
 
 def test_plain_keeps_the_identifier(captured_spans):
