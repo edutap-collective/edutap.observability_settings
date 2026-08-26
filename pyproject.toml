@@ -17,7 +17,7 @@ name = "edutap.observability_settings"
 # much as the semantics do: consumers pin `>=0.1.3,<0.2` (lmu_edutap_worker does),
 # and a minor bump would drop them out of range for a release that only gives them
 # a function they need not call.
-version = "0.1.4"
+version = "0.1.5"
 description = "Error reporting, tracing and structured logging, wired the same way in every eduTAP service"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -49,7 +49,17 @@ dependencies = [
     #
     # Upper bound at the next minor because this package reads the settings mixins and
     # the runtime helpers directly; a 0.x minor is where those may change shape.
-    "edutap.data_models>=0.2.1,<0.3",
+    #
+    # Raised to <0.4 on 2026-08-26. The bound did what an upper bound is for -- it
+    # stopped a move nobody had checked -- and then it had to be checked: 0.3.0 added
+    # the producing side of the Kafka runtime and the pass-command models, all of it
+    # additive. What this package reads is `ServiceSettings`, and that is untouched.
+    #
+    # It was blocking more than a version number. `lmu_edutap_backend` needs 0.3 for
+    # `publish()`, so no service could have both this package and a current
+    # data_models -- the observability of a service and its message contract had
+    # become mutually exclusive.
+    "edutap.data_models>=0.2.1,<0.4",
     "logfire>=4.40",
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
