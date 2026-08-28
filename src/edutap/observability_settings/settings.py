@@ -60,6 +60,25 @@ class ObservabilitySettings(ServiceSettings):
     #: publish identifiers by omission.
     person_uid_mode: PersonUidMode = "pseudonym"
 
+    #: WHICH ARTEFACT IS RUNNING -- the image tag, not the package version.
+    #:
+    #: Without it an error tracker cannot answer the one question that follows every
+    #: fix: *is this still happening in what we shipped?* Sentry's protocol calls it
+    #: ``release``, and Bugsink builds "resolved in the next release" on it. Measured
+    #: on the LMU instance on 2026-08-28: 7260 events, every single one with an empty
+    #: release, and therefore no issue that could ever be marked fixed.
+    #:
+    #: A FIELD RATHER THAN THE PACKAGE VERSION, because those are two different
+    #: things. `importlib.metadata.version()` answers what the distribution declares
+    #: -- for a service that is typically a placeholder like ``1.0.0.dev0`` and stays
+    #: the same across a hundred deployments. What identifies a deployment is the
+    #: image tag, and only the deployment knows it.
+    #:
+    #: Unset falls back to the ``service_version`` the caller passes to
+    #: :func:`~edutap.observability_settings.install.install_observability`, which is
+    #: better than nothing and honest about what it is.
+    release: str | None = None
+
 
 #: Where the OTLP endpoint comes from -- the OpenTelemetry specification's own
 #: variable, not a field of this class.
