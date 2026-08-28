@@ -18,6 +18,35 @@ administration rights; at the LMU it is the LMU identifier with `@lmu.de` append
 Pseudonymised it remains personal data. What a deployment decides here is not
 *whether* it is personal data but *who may see it*.
 
+## Which artefact is running
+
+Set `EDUTAP_RELEASE` (or the per-service prefix a consumer uses) to the **image
+tag** of what is deployed:
+
+```yaml
+EDUTAP_RELEASE: "2026-08-28_1859"
+```
+
+It reaches Sentry as `release`, and an error tracker needs it to answer the one
+question that follows every fix: *is this still happening in what we shipped?*
+Bugsink builds "resolved in the next release" on the same field.
+
+Unset, the `service_version` passed to `install_observability` is used instead --
+better than nothing, and honest about what it is: for a service that is typically a
+placeholder like `1.0.0.dev0` which stays the same across a hundred deployments.
+
+## Transport chatter is not a defect
+
+Kafka clients log at ERROR for every failed connection attempt while a broker is
+unreachable -- and they retry, and they recover. Sentry's `LoggingIntegration` turns
+each of those records into an event. `install_observability` therefore silences the
+loggers listed in `NOISY_LOGGERS` for the tracker.
+
+The trade-off is deliberate: a genuinely permanent broker outage produces no event in
+the tracker either. It produces log lines, it produces metrics, and the consumer's own
+failures report as before. An error tracker is for defects; an outage is for
+monitoring, and mixing the two is how a tracker becomes unread.
+
 ## Usage
 
 ```python

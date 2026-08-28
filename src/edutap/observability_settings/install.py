@@ -19,11 +19,36 @@ from typing import Any
 import logfire
 import sentry_sdk
 import structlog
+from sentry_sdk.integrations.logging import ignore_logger
 
 from .settings import OTLP_ENDPOINT_VARIABLE, ObservabilitySettings
 
+#: Loggers whose ERROR records are transport chatter, not defects.
+#:
+#: Sentry's ``LoggingIntegration`` is on by default and turns every ERROR record into
+#: an event. Kafka clients log at ERROR for every failed connection attempt while a
+#: broker is unreachable -- and they retry, and they recover. Measured on the LMU
+#: instance on 2026-08-28: of 7260 events, 1197 were retry chatter from three
+#: services during a rolling update in which nothing was actually wrong.
+#:
+#: THE TRADE-OFF IS DELIBERATE and worth stating: a genuinely permanent broker outage
+#: now produces no event in the tracker either. It produces log lines, it produces
+#: metrics, and the consumer's own failures -- a message it cannot handle, a DLQ
+#: entry -- report as before. An error tracker is for defects; an outage is for
+#: monitoring, and mixing the two is how a tracker becomes unread.
+NOISY_LOGGERS = (
+    "aiokafka",
+    "aiokafka.conn",
+    "aiokafka.cluster",
+    "aiokafka.consumer.group_coordinator",
+    "aiokafka.consumer.fetcher",
+    "kafka",
+)
 
-def sentry_options(settings: ObservabilitySettings) -> dict[str, Any]:
+
+def sentry_options(
+    settings: ObservabilitySettings, *, service_version: str | None = None
+) -> dict[str, Any]:
     """Return the options that decide what leaves the process.
 
     Each contradicts the backend's own default, and each was chosen against a
@@ -47,6 +72,13 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, Any]:
     The cost is real -- an event carries no timeline of what happened earlier -- and it
     is the same trade already made for local variables and the request body.
 
+    ``release`` -- the one option added rather than overridden. Without it an error
+    tracker cannot answer the question that follows every fix: *is this still
+    happening in what we shipped?* It comes from ``settings.release`` where a
+    deployment names its artefact, and falls back to the ``service_version`` the
+    caller passes. See the field's own documentation for why those are two different
+    things.
+
     ``Any`` rather than ``object`` in the return type, which is the one place this
     package spends the escape hatch: the mapping is heterogeneous by nature and is
     unpacked into a third-party signature, and ``object`` makes a type checker reject
@@ -56,6 +88,7 @@ def sentry_options(settings: ObservabilitySettings) -> dict[str, Any]:
     """
     return {
         "environment": settings.environment,
+        "release": settings.release or service_version,
         "traces_sample_rate": 0,
         "send_default_pii": False,
         "include_local_variables": False,
@@ -118,7 +151,15 @@ def install_observability(
     _configure_structlog(settings)
 
     if settings.sentry_dsn is not None:
-        sentry_sdk.init(dsn=settings.sentry_dsn.get_secret_value(), **sentry_options(settings))
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn.get_secret_value(),
+            **sentry_options(settings, service_version=service_version),
+        )
+        # AFTER init, because that is when the integration exists. Each name is a
+        # logger whose ERROR records are retries rather than defects; see
+        # NOISY_LOGGERS for the measurement and the trade-off.
+        for name in NOISY_LOGGERS:
+            ignore_logger(name)
 
 
 def _configure_structlog(settings: ObservabilitySettings) -> None:

@@ -130,3 +130,42 @@ def test_the_level_actually_filters(capsys, monkeypatch):
     structlog.get_logger().info("routine")
 
     assert "routine" not in capsys.readouterr().out
+
+
+def test_the_release_says_which_artefact_is_running():
+    """Without it, no issue can ever be marked fixed.
+
+    Measured on the LMU Bugsink instance on 2026-08-28: 7260 events, every single one
+    with an empty release. "Resolved in the next release" is built on this field, so
+    the workflow was not merely inconvenient -- it was unavailable.
+    """
+    options = sentry_options(
+        ObservabilitySettings(release="2026-08-28_1859"), service_version="1.0.0.dev0"
+    )
+    assert options["release"] == "2026-08-28_1859"
+
+
+def test_the_package_version_is_the_fallback_not_the_answer():
+    """A deployment names its artefact; the distribution version is what is left.
+
+    For a service `importlib.metadata.version()` is typically a placeholder like
+    `1.0.0.dev0` that stays the same across a hundred deployments -- better than
+    nothing, and honest about what it is.
+    """
+    options = sentry_options(ObservabilitySettings(), service_version="1.0.0.dev0")
+    assert options["release"] == "1.0.0.dev0"
+
+    ohne = sentry_options(ObservabilitySettings())
+    assert ohne["release"] is None
+
+
+def test_transport_chatter_is_not_a_defect():
+    """The Kafka clients log ERROR for every failed connection attempt, and recover.
+
+    Measured on the same instance: of 7260 events, 1197 were retry chatter from three
+    services during a rolling update in which nothing was actually wrong.
+    """
+    from edutap.observability_settings.install import NOISY_LOGGERS
+
+    assert "aiokafka" in NOISY_LOGGERS
+    assert "kafka" in NOISY_LOGGERS
