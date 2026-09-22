@@ -1,8 +1,8 @@
 """Wiring the three backends the same way in every eduTAP service.
 
 Three systems with three jobs, and the split is deliberate rather than historical:
-**Sentry** takes errors, **the OTLP collector** takes traces and metrics, and
-**structlog** produces the records that go to both. Nothing travels two paths --
+**Sentry** takes errors, **the OTLP collector** takes traces, metrics and log
+records, and **structlog** produces the events that go to both. Nothing travels two paths --
 Sentry's own tracing stays off, because the spans already go to the collector and
 Bugsink, the tracker this estate runs, states that it does not support traces.
 
@@ -12,13 +12,16 @@ is the same shape ``edutap.data_provider`` uses, from whose observability design
 record the Sentry options and their measurements are taken.
 """
 
+import json
 import logging
 import os
+import sys
 from typing import Any
 
 import logfire
 import sentry_sdk
 import structlog
+from opentelemetry._logs import SeverityNumber, get_logger_provider
 from sentry_sdk.integrations.logging import ignore_logger
 
 from .settings import OTLP_ENDPOINT_VARIABLE, ObservabilitySettings
@@ -162,25 +165,133 @@ def install_observability(
             ignore_logger(name)
 
 
+#: structlog's level names, mapped to the OTel severity they stand for and the text
+#: that goes with it.
+#:
+#: The text is the stdlib level name, as OpenTelemetry's own logging handler sets it.
+#: ``add_log_level`` has already turned ``exception`` into ``error`` by the time a
+#: record is made, and ``warn`` is the alias structlog still accepts.
+_SEVERITY = {
+    "debug": (SeverityNumber.DEBUG, "DEBUG"),
+    "info": (SeverityNumber.INFO, "INFO"),
+    "warning": (SeverityNumber.WARN, "WARNING"),
+    "warn": (SeverityNumber.WARN, "WARNING"),
+    "error": (SeverityNumber.ERROR, "ERROR"),
+    "critical": (SeverityNumber.FATAL, "CRITICAL"),
+}
+
+#: Keys that travel as a field of the record rather than as an attribute of it.
+#: Repeating them as attributes would give every query two places to look.
+_NOT_ATTRIBUTES = frozenset({"event", "level", "timestamp", "exc_info"})
+
+
+class OTelLogRecordProcessor:
+    """Emit each structlog event as an OTel log record, and pass it on unchanged.
+
+    ``logfire.StructlogProcessor`` does not do this: it turns an event into a
+    zero-duration *span*, so a log line reaches the collector on the traces signal and
+    never on the logs signal. This processor writes to the global logger provider
+    instead, through the public OpenTelemetry API. logfire has registered that
+    provider, and attached an OTLP exporter to it, by the time this runs.
+
+    The shape of the record is decided, not incidental:
+
+    - The body is ``event`` as a string, never a map. Collector-side redaction of
+      one-time tokens typically matches string bodies and attribute values, and a
+      map body would let a path segment slip past it.
+    - Every other field becomes a flat attribute. Scalars pass through; anything else
+      is serialised to JSON, because an OTel attribute cannot hold a mapping and
+      dropping the field would lose exactly what one debugs with.
+    - ``exc_info`` is handed to the SDK as the exception, which sets
+      ``exception.type``, ``exception.message`` and ``exception.stacktrace``. That is
+      why the processor sits *before* ``format_exc_info``, which would otherwise have
+      flattened the exception into a string already.
+    - Trace and span id come from the current context, so a record and the span it
+      was written in share a trace id without the caller doing anything.
+    """
+
+    def __init__(self) -> None:
+        """Take the logger from whatever provider is registered at install time."""
+        self._logger = get_logger_provider().get_logger("edutap.observability_settings")
+
+    def __call__(
+        self, logger: object, method_name: str, event_dict: structlog.typing.EventDict
+    ) -> structlog.typing.EventDict:
+        """Emit the record, then hand the event on for rendering."""
+        level = str(event_dict.get("level", method_name))
+        severity_number, severity_text = _SEVERITY.get(
+            level, (SeverityNumber.UNSPECIFIED, level.upper())
+        )
+        self._logger.emit(
+            severity_number=severity_number,
+            severity_text=severity_text,
+            body=str(event_dict.get("event", "")),
+            attributes={
+                key: _attribute_value(value)
+                for key, value in event_dict.items()
+                if key not in _NOT_ATTRIBUTES and value is not None
+            },
+            exception=_exception(event_dict.get("exc_info")),
+        )
+        return event_dict
+
+
+def _attribute_value(value: object) -> str | bool | int | float:
+    if isinstance(value, str | bool | int | float):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except ValueError:
+        # A circular structure. Losing its shape is better than losing the line.
+        return repr(value)
+
+
+def _exception(exc_info: object) -> BaseException | None:
+    """Resolve the three forms structlog accepts for ``exc_info``."""
+    if isinstance(exc_info, BaseException):
+        return exc_info
+    if isinstance(exc_info, tuple):
+        return exc_info[1]
+    if exc_info is True:
+        return sys.exc_info()[1]
+    return None
+
+
 def _configure_structlog(settings: ObservabilitySettings) -> None:
     """Point structlog at the collector and render what is left as JSON.
 
-    ``logfire.StructlogProcessor`` is the bridge: it turns each event into a log
-    record on the OTel side, so a log line and the span it happened inside share a
-    trace id without the caller doing anything. It sits in the chain rather than at
-    the end, because the record still has to be rendered for the container log.
+    Two bridges, and they produce different things:
+
+    - :class:`OTelLogRecordProcessor` writes each event as a **log record** on the
+      logs signal. That is what a log backend receives, with service name,
+      environment, severity and trace id. It is only added where it can go somewhere:
+      with telemetry on and an OTLP endpoint set. Without an endpoint logfire prints
+      to the console, and a record processor would print every line a second time.
+    - ``logfire.StructlogProcessor`` writes each event as a zero-duration **span** on
+      the traces signal, so a trace keeps showing what was logged inside it. It does
+      not produce log records, whatever its name suggests.
+
+    Both sit in the chain rather than at the end, because the event still has to be
+    rendered for the container log.
 
     JSON rather than the developer console renderer: these lines are read out of
     ``docker service logs`` and, later, out of the collector. A DLQ entry that cannot
     be found by ``edutap-event-id`` is a DLQ entry nobody replays.
     """
+    exports_records = (
+        settings.telemetry_enabled
+        and settings.export_log_records
+        and bool(os.environ.get(OTLP_ENDPOINT_VARIABLE))
+    )
     processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
     ]
+    if exports_records:
+        processors.append(OTelLogRecordProcessor())
+    processors.append(structlog.processors.format_exc_info)
     if settings.telemetry_enabled:
         processors.append(logfire.StructlogProcessor())
     processors.append(structlog.processors.JSONRenderer())

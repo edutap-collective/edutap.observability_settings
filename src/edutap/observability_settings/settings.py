@@ -79,6 +79,18 @@ class ObservabilitySettings(ServiceSettings):
     #: better than nothing and honest about what it is.
     release: str | None = None
 
+    #: Whether each structlog event also leaves as an OTel log record.
+    #:
+    #: On by default, and only effective where it can be: with ``telemetry_enabled``
+    #: and an OTLP endpoint set. A collector can then route the records to a log
+    #: backend, where they carry the service's resource attributes, a severity and the
+    #: trace id of the span they were written in -- which a container log line has
+    #: none of.
+    #:
+    #: The switch exists for a deployment whose collector already turns container logs
+    #: into the same thing and would otherwise hold every line twice.
+    export_log_records: bool = True
+
 
 #: Where the OTLP endpoint comes from -- the OpenTelemetry specification's own
 #: variable, not a field of this class.

@@ -90,6 +90,7 @@ package, and another university deploying them should not have to learn an LMU n
 | `EDUTAP_SENTRY_DSN` | unset | Unset means no error tracker. One project per service. |
 | `EDUTAP_PSEUDONYM_SALT` | unset | The HMAC key behind the person pseudonym. Without it there is no pseudonym at all. |
 | `EDUTAP_PERSON_UID_MODE` | `pseudonym` | `pseudonym` · `plain` · `omit` |
+| `EDUTAP_EXPORT_LOG_RECORDS` | `true` | Each structlog event also leaves as an OTel log record. Effective only with telemetry on and an endpoint set. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | **Not** an `EDUTAP_` field — see below. |
 
 ### Why the endpoint is not one of ours
@@ -122,9 +123,31 @@ of a small, enumerable value space and reversible by anyone who can hash the dir
 
 ## What the three backends do
 
-Sentry takes errors. An OTLP collector takes traces and metrics. structlog produces
-the records that reach both, bridged by `logfire.StructlogProcessor`, so a log line
-and the span it happened inside share a trace id without the caller doing anything.
+Sentry takes errors. An OTLP collector takes traces, metrics and log records.
+structlog produces the events that reach both, and two bridges carry them to the
+collector:
+
+- **A log record per event**, on the logs signal. This is what a log backend receives,
+  with service name, environment, severity and the trace id of the span the event was
+  written in. The body is the `event` as a string; every other field is an attribute,
+  and anything that is not a scalar arrives as JSON. An exception arrives as
+  `exception.type`, `exception.message` and `exception.stacktrace`.
+- **A zero-duration span per event**, on the traces signal, made by
+  `logfire.StructlogProcessor`. It keeps a trace showing what was logged inside it.
+  Despite its name, this bridge does not produce log records.
+
+Log records are only made with telemetry on and `OTEL_EXPORTER_OTLP_ENDPOINT` set.
+Every line still goes to stdout as JSON, so `docker service logs` keeps working. A
+deployment that also ships container logs to the same backend holds each line twice,
+distinguished by `service_name`; `EDUTAP_EXPORT_LOG_RECORDS=false` turns the records
+off where that is not wanted.
+
+```{warning}
+The records leave only because logfire attaches an OTLP log exporter to the logger
+provider it registers. That is logfire's internal wiring, not a documented contract.
+`tests/test_log_records.py` sends real OTLP to a loopback receiver, so a logfire
+upgrade that changes it fails the suite instead of losing the logs silently.
+```
 
 Nothing travels two paths: Sentry's own tracing stays off (`traces_sample_rate=0`),
 because the spans already go to the collector and Bugsink — the tracker this estate
