@@ -82,6 +82,17 @@ def sentry_options(
     caller passes. See the field's own documentation for why those are two different
     things.
 
+    ``traces_sample_rate=None`` and ``auto_session_tracking=False`` -- the two options
+    that keep the tracker to defects. Measured on 2026-10-12 with sentry-sdk 2.69.2
+    and 2.71.0: with a rate of ``0`` and session tracking on, a process that receives
+    nothing but its health check sends one envelope a minute, carrying ``sessions``
+    (release health, aggregated per request) and a ``client_report`` of the
+    transactions the rate of ``0`` started and then discarded. Two services with three
+    and eight processes made that 86 % of all requests on the vhost in front of the
+    tracker, around the clock, for data the tracker does not use. ``None`` rather than
+    ``0`` starts no transaction at all, so there is nothing to discard and nothing to
+    report; tracing is the collector's job either way.
+
     ``Any`` rather than ``object`` in the return type, which is the one place this
     package spends the escape hatch: the mapping is heterogeneous by nature and is
     unpacked into a third-party signature, and ``object`` makes a type checker reject
@@ -92,7 +103,8 @@ def sentry_options(
     return {
         "environment": settings.environment,
         "release": settings.release or service_version,
-        "traces_sample_rate": 0,
+        "traces_sample_rate": None,
+        "auto_session_tracking": False,
         "send_default_pii": False,
         "include_local_variables": False,
         "max_request_body_size": "never",

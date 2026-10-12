@@ -1,4 +1,9 @@
+import pytest
+import sentry_sdk
+import sentry_sdk.transport
 import structlog
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from edutap.observability_settings import (
@@ -13,7 +18,18 @@ def test_traces_do_not_travel_both_paths():
     # Traces go to the OTLP collector. Sentry's own tracing would be a second copy of
     # the same spans in a second system, and Bugsink -- the tracker this estate runs
     # -- states that it intentionally does not support them.
-    assert sentry_options(ObservabilitySettings())["traces_sample_rate"] == 0
+    #
+    # None, not 0: a rate of 0 still starts a transaction per request, discards it,
+    # and reports the discard in a client report -- an envelope a minute per process.
+    assert sentry_options(ObservabilitySettings())["traces_sample_rate"] is None
+
+
+def test_no_session_statistics_leave_the_process():
+    # Release health is on by default and aggregates every request, health checks
+    # included, into a sessions envelope flushed once a minute per process. The
+    # tracker this estate runs does not use it; measured on 2026-10-12, it was 86 % of
+    # all requests on the vhost the tracker sits behind.
+    assert sentry_options(ObservabilitySettings())["auto_session_tracking"] is False
 
 
 def test_nothing_that_carries_a_person_is_switched_on():
@@ -169,3 +185,62 @@ def test_transport_chatter_is_not_a_defect():
 
     assert "aiokafka" in NOISY_LOGGERS
     assert "kafka" in NOISY_LOGGERS
+
+
+class _CapturingTransport(sentry_sdk.transport.Transport):
+    """Keeps every envelope instead of sending it."""
+
+    def __init__(self, options=None):
+        super().__init__(options)
+        self.envelopes = []
+
+    def capture_envelope(self, envelope):
+        self.envelopes.append(envelope)
+
+
+@pytest.fixture
+def tracker():
+    """A real Sentry client with the package's options, on a transport we can read."""
+    transport = _CapturingTransport()
+    sentry_sdk.init(
+        dsn="https://key@example.invalid/1",
+        transport=transport,
+        **sentry_options(ObservabilitySettings()),
+    )
+    yield transport
+    sentry_sdk.get_client().close()
+    sentry_sdk.init()
+
+
+def test_a_process_that_only_answers_health_checks_sends_the_tracker_nothing(tracker):
+    """Nothing but defects goes to the tracker -- measured, not inferred from options.
+
+    Measured on 2026-10-12 with sentry-sdk 2.69.2 and 2.71.0 against the 0.2.0 options:
+    a FastAPI process receiving nothing but its health check sent one envelope a
+    minute, carrying `sessions` and a `client_report` of discarded transactions. Two
+    services, three and eight processes, made that 86 % of all requests on the vhost
+    in front of the tracker -- traffic around the clock that the tracker discards.
+    """
+    app = FastAPI()
+
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        for _ in range(4):
+            client.get("/health")
+    sentry_sdk.flush()
+
+    assert [item.type for envelope in tracker.envelopes for item in envelope.items] == []
+
+
+def test_a_defect_still_reaches_the_tracker(tracker):
+    try:
+        1 / 0  # noqa: B018
+    except ZeroDivisionError:
+        sentry_sdk.capture_exception()
+    sentry_sdk.flush()
+
+    types = [item.type for envelope in tracker.envelopes for item in envelope.items]
+    assert types == ["event"]

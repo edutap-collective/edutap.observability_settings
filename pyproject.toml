@@ -20,7 +20,10 @@ name = "edutap.observability_settings"
 # 0.2.0, not 0.1.7: every structlog event now also leaves as an OTel log record,
 # which changes what leaves every consuming service. Consumers pin `<0.2`, so each one
 # picks this up by raising its bound deliberately rather than on the next lock.
-version = "0.2.0"
+# 0.2.1: the tracker gets defects only -- no release-health sessions, no client reports
+# of discarded transactions. Less leaves every process, and nothing a consumer calls
+# changed shape, so a patch release within the bound consumers already raised.
+version = "0.2.1"
 description = "Error reporting, tracing and structured logging, wired the same way in every eduTAP service"
 readme = "README.md"
 requires-python = ">=3.13"
