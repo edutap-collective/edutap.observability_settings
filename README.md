@@ -149,9 +149,15 @@ provider it registers. That is logfire's internal wiring, not a documented contr
 upgrade that changes it fails the suite instead of losing the logs silently.
 ```
 
-Nothing travels two paths: Sentry's own tracing stays off (`traces_sample_rate=0`),
+Nothing travels two paths: Sentry's own tracing stays off (`traces_sample_rate=None`),
 because the spans already go to the collector and Bugsink — the tracker this estate
-runs — states that it does not support traces.
+runs — states that it does not support traces. Release health stays off as well
+(`auto_session_tracking=False`): the tracker gets defects and nothing else.
+
+Measured on 2026-10-12 with sentry-sdk 2.69.2 and 2.71.0: with a rate of `0` and
+session tracking on, as up to 0.2.0, every process sent one envelope a minute even
+when it served nothing but its health check — `sessions` plus a `client_report` of
+the transactions it had started and discarded. `None` starts no transaction at all.
 
 ```{important}
 `send_to_logfire=False` is not a detail. The library defaults it to `True`, so leaving
